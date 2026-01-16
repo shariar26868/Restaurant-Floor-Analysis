@@ -45,3 +45,4 @@ def format_guest_response(guest: Dict) -> Dict:
 def format_guest_list(guests: list) -> list:
     """Format multiple guest objects"""
     return [format_guest_response(g) for g in guests]
+# ---------------------------
