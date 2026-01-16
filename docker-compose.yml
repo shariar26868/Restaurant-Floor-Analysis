@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  api:
+    build: .
+    container_name: restaurant-api
+    ports:
+      - "8000:8000"
+
+    env_file:
+      - .env
+
+    environment:
+      DATABASE_NAME: ${DATABASE_NAME}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MONGODB_URL: ${MONGODB_URL}
+
+    command: >
+      uvicorn main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 1
+
+    restart: unless-stopped
+
+    networks:
+      - restaurant-network
+
+    # 🔽 Uncomment ONLY for local development
+    # volumes:
+    #   - ./:/app
+
+networks:
+  restaurant-network:
+    driver: bridge
