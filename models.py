@@ -98,13 +98,84 @@ class DiningHistory(BaseModel):
     )
 
 
+# 🟢 NEW: Floor Plan Models
+
+class PixelCoordinates(BaseModel):
+    """Pixel coordinates in the image"""
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class CenterPoint(BaseModel):
+    """Center point in real-world coordinates"""
+    x: float
+    y: float
+
+
+class RealWorldCoordinates(BaseModel):
+    """Real-world coordinates with measurements"""
+    x: float
+    y: float
+    width: float
+    height: float
+    unit: str = "meters"
+    centerPoint: CenterPoint
+    area: Optional[float] = None
+
+
+class DetectedTable(BaseModel):
+    """Single detected table from floor plan"""
+    tableId: str
+    detectionMethod: Literal["yolo", "shape"] = "yolo"
+    detectedClass: Optional[str] = None
+    pixelCoordinates: PixelCoordinates
+    realWorldCoordinates: RealWorldCoordinates
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class RoomDimensions(BaseModel):
+    """Room dimensions for scaling"""
+    length: float = Field(gt=0, description="Room length")
+    width: float = Field(gt=0, description="Room width")
+    unit: str = Field(default="meters", description="Measurement unit")
+
+
+class FloorPlanAnalysis(BaseModel):
+    """Floor plan analysis result"""
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    floorPlanUrl: str
+    analysisStatus: Literal["processing", "completed", "failed"] = "processing"
+    detectedTables: List[DetectedTable] = Field(default_factory=list)
+    annotatedFloorPlanUrl: Optional[str] = None
+    roomDimensions: RoomDimensions
+    tableCount: Optional[int] = 0
+    error: Optional[str] = None
+    createdAt: datetime = Field(default_factory=datetime.utcnow)
+
+    @field_serializer('id')
+    def serialize_id(self, value: Optional[PyObjectId], _info):
+        return str(value) if value else None
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        extra='allow'
+    )
+
+
+# 🔴 DEPRECATED: Old video analysis models (keeping for backward compatibility)
+
 class DetectedObject(BaseModel):
+    """Deprecated: Use DetectedTable instead"""
     type: str
     coordinates: dict
     confidence: float = 0.75
 
 
 class VideoAnalysis(BaseModel):
+    """Deprecated: Use FloorPlanAnalysis instead"""
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     videoUrl: str
     analysisStatus: Literal["processing", "completed", "failed"] = "processing"

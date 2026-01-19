@@ -2,6 +2,7 @@
 fastapi==0.109.0
 uvicorn[standard]>=0.22.0
 python-multipart>=0.0.6
+pydantic-settings>=2.0.0
 
 # MongoDB
 motor==3.3.2
@@ -13,9 +14,17 @@ boto3==1.34.19
 # AI - OpenAI API
 openai>=1.0.0
 
-# Video Processing
+# Video Processing (headless version for servers)
 opencv-python-headless==4.9.0.80
 Pillow==10.2.0
+
+# 🟢 NEW: YOLO for object detection
+ultralytics>=8.0.0
+
+# 🟢 NEW: Additional dependencies for YOLO
+numpy>=1.24.0
+torch>=2.0.0
+torchvision>=0.15.0
 
 # Utils
 python-dotenv>=1.0.0

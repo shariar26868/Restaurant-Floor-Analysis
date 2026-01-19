@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import connect_db, close_db
-from routes import guests, video
+from routes import floor_plan, guests
 import logging
 
 # ---------------------------
@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------
 # FastAPI app
 # ---------------------------
-app = FastAPI(title="Restaurant Management API")
+app = FastAPI(
+    title="Restaurant Management API",
+    description="API for restaurant floor plan analysis and guest management",
+    version="1.0.0"
+)
 
 # ---------------------------
 # CORS Middleware
@@ -43,14 +47,26 @@ async def shutdown():
 # Routes
 # ---------------------------
 app.include_router(guests.router, prefix="/api/guests", tags=["Guests"])
-app.include_router(video.router, prefix="/api/video", tags=["Video Analysis"])
+
+# 🟢 Floor plan router - prefix change করলাম
+app.include_router(floor_plan.router, prefix="/api/floor-plan", tags=["Floor Plan Analysis"])
 
 # ---------------------------
 # Health / Root Endpoint
 # ---------------------------
 @app.get("/", tags=["Root"])
 def root():
-    return {"message": "Restaurant Management API", "status": "running"}
+    return {
+        "message": "Restaurant Management API",
+        "status": "running",
+        "version": "1.0.0",
+        "endpoints": {
+            "guests": "/api/guests",
+            "floor_plan_upload": "POST /api/floor-plan/upload",
+            "floor_plan_analysis": "GET /api/floor-plan/analysis/{analysis_id}",
+            "all_analyses": "GET /api/floor-plan/all"
+        }
+    }
 
 # ---------------------------
 # Optional local development entry
@@ -62,6 +78,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        # reload=True  # Only for dev
-        reload=True
+        reload=True  # Only for dev
     )
