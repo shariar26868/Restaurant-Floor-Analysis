@@ -1,39 +1,32 @@
-version: "3.8"
-
 services:
-  api:
+  app:
     build: .
-    container_name: restaurant-api
+    container_name: restaurant-analysis-app
     ports:
-      - "8000:8000"
-
-    env_file:
-      - .env
-
+      - "8035:8000"
     environment:
-      DATABASE_NAME: ${DATABASE_NAME}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      AWS_REGION: ${AWS_REGION}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      MONGODB_URL: ${MONGODB_URL}
-
-    command: >
-      uvicorn main:app
-      --host 0.0.0.0
-      --port 8000
-      --workers 1
-
+      # MongoDB
+      - MONGODB_URL=${MONGODB_URL}
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME}
+      
+      # AWS S3
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      
+      # OpenAI
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # Other settings
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+    volumes:
+      - .:/app
+      - /app/__pycache__
     restart: unless-stopped
-
     networks:
-      - restaurant-network
-
-    # 🔽 Uncomment ONLY for local development
-    # volumes:
-    #   - ./:/app
+      - app-network
 
 networks:
-  restaurant-network:
+  app-network:
     driver: bridge
