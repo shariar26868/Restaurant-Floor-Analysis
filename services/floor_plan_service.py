@@ -1345,6 +1345,380 @@
 
 
 
+
+
+# # services/floor_plan_service.py
+# """
+# Simple Table Detection Service
+# ===============================
+# Uses ONLY OpenAI Vision API - no CV hallucinations!
+# """
+
+# import cv2
+# from urllib.parse import urlparse, unquote
+# import numpy as np
+# from typing import List, Dict, Tuple
+# from bson import ObjectId
+# from fastapi.concurrency import run_in_threadpool
+# import logging
+# import io
+# import json
+# import base64
+# from PIL import Image
+# import boto3
+# from openai import OpenAI
+# from config import settings
+# from database import get_database
+# from services.s3_service import upload_to_s3
+
+# # Configure logging
+# logging.basicConfig(level=logging.INFO)
+# logger = logging.getLogger(__name__)
+
+# # Initialize OpenAI client
+# openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+
+# async def detect_tables_from_floor_plan_url(
+#     floor_plan_url: str,
+#     analysis_id: str,
+#     room_dimensions: Dict
+# ):
+#     """
+#     Table detection using OpenAI Vision API only
+#     """
+#     db = get_database()
+    
+#     try:
+#         logger.info(f"🔍 Starting floor plan analysis for {analysis_id}")
+        
+#         # Download image from S3
+#         s3_client = boto3.client(
+#             's3',
+#             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+#             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+#             region_name=settings.AWS_REGION
+#         )
+        
+#         parsed_url = urlparse(floor_plan_url)
+#         s3_key = unquote(parsed_url.path.lstrip('/'))
+        
+#         logger.info(f"📂 S3 Key: {s3_key}")
+        
+#         response = s3_client.get_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
+#         image_content = response['Body'].read()
+        
+#         logger.info(f"✅ Downloaded {len(image_content)} bytes")
+        
+#         # Run detection
+#         detected_tables, annotated_image, detection_metadata = await run_in_threadpool(
+#             _detect_with_openai_vision,
+#             image_content,
+#             room_dimensions
+#         )
+        
+#         logger.info(f"✅ Detected {len(detected_tables)} tables")
+        
+#         # Encode and upload annotated image
+#         success, img_encoded = cv2.imencode('.jpg', annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+#         if not success:
+#             raise Exception("Failed to encode annotated image")
+        
+#         annotated_url = await upload_to_s3(
+#             img_encoded.tobytes(),
+#             f"floor_plans/annotated_{analysis_id}.jpg"
+#         )
+        
+#         # Update database
+#         await db.floor_plan_analysis.update_one(
+#             {"_id": ObjectId(analysis_id)},
+#             {
+#                 "$set": {
+#                     "analysisStatus": "completed",
+#                     "detectedTables": detected_tables,
+#                     "annotatedFloorPlanUrl": annotated_url,
+#                     "tableCount": len(detected_tables),
+#                     "detectionMetadata": detection_metadata
+#                 }
+#             }
+#         )
+        
+#         logger.info(f"✅ Analysis completed for {analysis_id}")
+        
+#     except Exception as e:
+#         logger.error(f"❌ Analysis error: {e}")
+#         import traceback
+#         logger.error(traceback.format_exc())
+        
+#         await db.floor_plan_analysis.update_one(
+#             {"_id": ObjectId(analysis_id)},
+#             {"$set": {"analysisStatus": "failed", "error": str(e)}}
+#         )
+
+
+# def _detect_with_openai_vision(
+#     image_content: bytes,
+#     room_dimensions: Dict
+# ) -> Tuple[List[Dict], np.ndarray, Dict]:
+#     """
+#     Use OpenAI Vision to detect tables
+#     """
+#     # Load image
+#     img = _load_image(image_content)
+#     height, width = img.shape[:2]
+    
+#     logger.info(f"📐 Image: {width}x{height}")
+    
+#     try:
+#         base64_image = base64.b64encode(image_content).decode('utf-8')
+        
+#         # IMPROVED PROMPT - very specific instructions
+#         prompt = f"""You are analyzing a restaurant floor plan image to detect dining tables.
+
+# **Room Dimensions:** {room_dimensions['length']} x {room_dimensions['width']} {room_dimensions['unit']}
+# **Image Size:** {width} x {height} pixels
+
+# **YOUR TASK:** Identify EVERY dining table in this floor plan.
+
+# **What is a TABLE:**
+# - A table is where customers sit to eat
+# - Tables can be: circular (round), rectangular (square/oblong), or irregular shapes
+# - Tables usually have chairs around them (but chairs might not always be visible)
+# - Look for table shapes in the dining area, NOT in kitchen/storage areas
+
+# **SCANNING PROCEDURE:**
+# 1. Divide the image into 5 vertical sections: Far Left, Left, Center, Right, Far Right
+# 2. In EACH section, scan from top to bottom
+# 3. Mark every table-like shape you see
+# 4. DO NOT miss tables on the edges of the image!
+
+# **IMPORTANT RULES:**
+# ✅ Count all tables, even small ones
+# ✅ Count tables near walls/edges
+# ✅ If you see a group of chairs, there's likely a table there
+# ❌ Do NOT count kitchen counters, bars (unless they have seating)
+# ❌ Do NOT count the same table twice
+# ❌ Do NOT invent tables that don't exist
+
+# **OUTPUT FORMAT:**
+# Return a JSON array with each table. For each table provide:
+# - table_number: sequential number (1, 2, 3...)
+# - type: "rectangular" or "circular" or "irregular"
+# - center_x_percent: X position of table center as % of image width (0.0 to 1.0)
+# - center_y_percent: Y position of table center as % of image height (0.0 to 1.0)
+# - width_percent: table width as % of image width
+# - height_percent: table height as % of image height
+# - estimated_seats: estimated number of seats (2, 4, 6, 8, etc.)
+
+# **Example:**
+# [
+#   {{
+#     "table_number": 1,
+#     "type": "rectangular",
+#     "center_x_percent": 0.25,
+#     "center_y_percent": 0.30,
+#     "width_percent": 0.08,
+#     "height_percent": 0.06,
+#     "estimated_seats": 4
+#   }},
+#   {{
+#     "table_number": 2,
+#     "type": "circular",
+#     "center_x_percent": 0.65,
+#     "center_y_percent": 0.45,
+#     "width_percent": 0.07,
+#     "height_percent": 0.07,
+#     "estimated_seats": 4
+#   }}
+# ]
+
+# Return ONLY the JSON array, nothing else. Be thorough and don't miss any tables!"""
+
+#         logger.info("🤖 Calling OpenAI Vision API...")
+        
+#         response = openai_client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=[
+#                 {
+#                     "role": "user",
+#                     "content": [
+#                         {"type": "text", "text": prompt},
+#                         {
+#                             "type": "image_url",
+#                             "image_url": {
+#                                 "url": f"data:image/jpeg;base64,{base64_image}"
+#                             }
+#                         }
+#                     ]
+#                 }
+#             ],
+#             max_tokens=2000,
+#             temperature=0.1  # Low temperature for consistency
+#         )
+        
+#         content = response.choices[0].message.content.strip()
+#         logger.info(f"📥 OpenAI Response received ({len(content)} chars)")
+        
+#         # Parse JSON
+#         if content.startswith("```json"):
+#             content = content.split("```json")[1].split("```")[0].strip()
+#         elif content.startswith("```"):
+#             content = content.split("```")[1].split("```")[0].strip()
+        
+#         tables_data = json.loads(content)
+        
+#         logger.info(f"✅ OpenAI detected {len(tables_data)} tables")
+        
+#         # Convert to standard format
+#         detected_tables = []
+        
+#         for table in tables_data:
+#             x = int(table['center_x_percent'] * width - (table.get('width_percent', 0.05) * width / 2))
+#             y = int(table['center_y_percent'] * height - (table.get('height_percent', 0.05) * height / 2))
+#             w = int(table.get('width_percent', 0.05) * width)
+#             h = int(table.get('height_percent', 0.05) * height)
+            
+#             # Ensure values are within bounds
+#             x = max(0, min(x, width - 1))
+#             y = max(0, min(y, height - 1))
+#             w = max(20, min(w, width - x))
+#             h = max(20, min(h, height - y))
+            
+#             detected_tables.append({
+#                 "tableId": f"table_{table['table_number']}",
+#                 "detectionMethod": "openai_vision",
+#                 "tableType": table.get('type', 'rectangular'),
+#                 "chairCount": table.get('estimated_seats', 0),
+#                 "pixelCoordinates": {
+#                     "x": x,
+#                     "y": y,
+#                     "width": w,
+#                     "height": h
+#                 },
+#                 "confidence": 0.90  # OpenAI is quite reliable
+#             })
+        
+#         # Draw annotations
+#         annotated = _draw_annotations(img.copy(), detected_tables)
+        
+#         # Metadata
+#         metadata = {
+#             "detection_method": "openai_vision",
+#             "table_count": len(detected_tables),
+#             "table_types": list(set([t['tableType'] for t in detected_tables])),
+#             "total_estimated_seats": sum([t['chairCount'] for t in detected_tables])
+#         }
+        
+#         return detected_tables, annotated, metadata
+        
+#     except json.JSONDecodeError as e:
+#         logger.error(f"❌ JSON parse error: {e}")
+#         if 'content' in locals():
+#             logger.error(f"Response was: {content}")
+#         # Return empty on error
+#         return [], img, {"error": str(e)}
+        
+#     except Exception as e:
+#         logger.error(f"❌ OpenAI Vision error: {e}")
+#         import traceback
+#         logger.error(traceback.format_exc())
+#         return [], img, {"error": str(e)}
+
+
+# def _load_image(image_content: bytes) -> np.ndarray:
+#     """Load image from bytes"""
+#     try:
+#         import pillow_avif
+#     except ImportError:
+#         pass
+    
+#     img_pil = Image.open(io.BytesIO(image_content))
+    
+#     if img_pil.mode != 'RGB':
+#         img_pil = img_pil.convert('RGB')
+    
+#     img_array = np.array(img_pil)
+#     return cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+
+
+# def _draw_annotations(img: np.ndarray, tables: List[Dict]) -> np.ndarray:
+#     """Draw clean annotations on the image"""
+    
+#     colors = {
+#         'circular': (255, 0, 255),      # Magenta
+#         'rectangular': (0, 165, 255),   # Orange
+#         'irregular': (0, 255, 255)      # Yellow
+#     }
+    
+#     for table in tables:
+#         px = table['pixelCoordinates']
+#         x, y, w, h = px['x'], px['y'], px['width'], px['height']
+        
+#         table_type = table.get('tableType', 'rectangular')
+#         color = colors.get(table_type, (0, 255, 0))
+        
+#         # Draw shape
+#         if table_type == 'circular':
+#             center = (x + w // 2, y + h // 2)
+#             radius = max(w, h) // 2
+#             cv2.circle(img, center, radius, color, 2)
+#         else:
+#             cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        
+#         # Label
+#         seats = table.get('chairCount', 0)
+#         label = f"{table['tableId']}"
+#         if seats > 0:
+#             label += f" ({seats})"
+        
+#         # Draw label with background
+#         font = cv2.FONT_HERSHEY_SIMPLEX
+#         font_scale = 0.4
+#         thickness = 1
+#         (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, thickness)
+        
+#         cv2.rectangle(img, (x, y - text_h - 6), (x + text_w + 4, y - 2), color, -1)
+#         cv2.putText(img, label, (x + 2, y - 4), font, font_scale, (255, 255, 255), thickness)
+        
+#         # Center dot
+#         cv2.circle(img, (x + w // 2, y + h // 2), 3, (0, 0, 255), -1)
+    
+#     # Summary
+#     summary_h = 100
+#     cv2.rectangle(img, (5, 5), (250, summary_h), (0, 0, 0), -1)
+#     cv2.rectangle(img, (5, 5), (250, summary_h), (255, 255, 255), 2)
+    
+#     y_pos = 25
+#     cv2.putText(img, f"Tables: {len(tables)}", (15, y_pos),
+#                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+#     # Type breakdown
+#     type_counts = {}
+#     total_seats = 0
+#     for t in tables:
+#         type_counts[t['tableType']] = type_counts.get(t['tableType'], 0) + 1
+#         total_seats += t.get('chairCount', 0)
+    
+#     y_pos += 25
+#     for t_type, count in type_counts.items():
+#         color = colors.get(t_type, (128, 128, 128))
+#         cv2.putText(img, f"{t_type}: {count}", (15, y_pos),
+#                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+#         y_pos += 20
+    
+#     cv2.putText(img, f"Seats: {total_seats}", (15, y_pos),
+#                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+#     return img
+
+
+
+
+
+
+
+
+
 # services/floor_plan_service.py
 """
 Simple Table Detection Service
@@ -1465,7 +1839,12 @@ def _detect_with_openai_vision(
     img = _load_image(image_content)
     height, width = img.shape[:2]
     
+    # 🆕 Calculate pixel-to-meter scale
+    scale_x = room_dimensions['length'] / width
+    scale_y = room_dimensions['width'] / height
+    
     logger.info(f"📐 Image: {width}x{height}")
+    logger.info(f"🔢 Scale: {scale_x:.4f}m/px (X), {scale_y:.4f}m/px (Y)")
     
     try:
         base64_image = base64.b64encode(image_content).decode('utf-8')
@@ -1571,6 +1950,7 @@ Return ONLY the JSON array, nothing else. Be thorough and don't miss any tables!
         detected_tables = []
         
         for table in tables_data:
+            # Calculate pixel coordinates
             x = int(table['center_x_percent'] * width - (table.get('width_percent', 0.05) * width / 2))
             y = int(table['center_y_percent'] * height - (table.get('height_percent', 0.05) * height / 2))
             w = int(table.get('width_percent', 0.05) * width)
@@ -1581,6 +1961,12 @@ Return ONLY the JSON array, nothing else. Be thorough and don't miss any tables!
             y = max(0, min(y, height - 1))
             w = max(20, min(w, width - x))
             h = max(20, min(h, height - y))
+            
+            # 🆕 Calculate real-world coordinates
+            real_x = x * scale_x
+            real_y = y * scale_y
+            real_width = w * scale_x
+            real_height = h * scale_y
             
             detected_tables.append({
                 "tableId": f"table_{table['table_number']}",
@@ -1593,6 +1979,14 @@ Return ONLY the JSON array, nothing else. Be thorough and don't miss any tables!
                     "width": w,
                     "height": h
                 },
+                # 🆕 Added real-world coordinates
+                "realWorldCoordinates": {
+                    "x": round(real_x, 2),
+                    "y": round(real_y, 2),
+                    "width": round(real_width, 2),
+                    "height": round(real_height, 2),
+                    "unit": room_dimensions['unit']
+                },
                 "confidence": 0.90  # OpenAI is quite reliable
             })
         
@@ -1604,7 +1998,12 @@ Return ONLY the JSON array, nothing else. Be thorough and don't miss any tables!
             "detection_method": "openai_vision",
             "table_count": len(detected_tables),
             "table_types": list(set([t['tableType'] for t in detected_tables])),
-            "total_estimated_seats": sum([t['chairCount'] for t in detected_tables])
+            "total_estimated_seats": sum([t['chairCount'] for t in detected_tables]),
+            "scale_factor": {
+                "x": round(scale_x, 4),
+                "y": round(scale_y, 4),
+                "unit": f"{room_dimensions['unit']}/pixel"
+            }
         }
         
         return detected_tables, annotated, metadata
@@ -1663,11 +2062,17 @@ def _draw_annotations(img: np.ndarray, tables: List[Dict]) -> np.ndarray:
         else:
             cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
         
-        # Label
+        # Label with real-world dimensions
         seats = table.get('chairCount', 0)
+        real_coords = table.get('realWorldCoordinates', {})
+        real_w = real_coords.get('width', 0)
+        real_h = real_coords.get('height', 0)
+        
         label = f"{table['tableId']}"
         if seats > 0:
             label += f" ({seats})"
+        if real_w > 0 and real_h > 0:
+            label += f" {real_w:.1f}x{real_h:.1f}m"
         
         # Draw label with background
         font = cv2.FONT_HERSHEY_SIMPLEX
