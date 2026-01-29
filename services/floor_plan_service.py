@@ -2216,4 +2216,5 @@ def _draw_annotations(img: np.ndarray, tables: List[Dict]) -> np.ndarray:
 
         cv2.circle(img, (x + w // 2, y + h // 2), 3, (0, 0, 255), -1)
 
+
     return img
